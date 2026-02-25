@@ -1,128 +1,107 @@
-name: Pi-hole 静态 FTL + Zashboard Magisk 模块（BIND9 风格）
+name: Pi-hole 完整版 Magisk 模块（静态 FTL + Zashboard + 全脚本）
 
 on:
   schedule:
-    - cron: '0 16 * * *'   # 北京时间每天 00:00 自动更新
+    - cron: '0 16 * * *'   # 北京时间每天 00:00 自动
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-full-magisk:
     runs-on: ubuntu-24.04
     steps:
       - name: 安装工具
-        run: sudo apt-get update && sudo apt-get install -y makeself wget curl tar gzip make cmake file patchelf binutils git unzip zip
+        run: sudo apt-get update && sudo apt-get install -y wget curl tar gzip make cmake file patchelf binutils git unzip zip
 
-      # ==================== BIND9 风格静态编译 pihole-FTL (aarch64) ====================
-      - name: Checkout FTL
+      # ==================== BIND9 风格编译静态 FTL ====================
+      - name: Checkout FTL & 编译静态版
         uses: actions/checkout@v4
         with:
           repository: pi-hole/FTL
           ref: development
 
-      - name: 下载 musl 交叉工具链 (aarch64-android)
+      - name: musl 工具链 + 依赖预构建
         run: |
           wget -q https://github.com/userdocs/musl-cross-make/releases/latest/download/aarch64-linux-musl-cross.tgz -O tc.tgz
           sudo tar -xzf tc.tgz -C /opt/
           sudo mv /opt/aarch64-linux-musl-cross /opt/musl-toolchain
           echo "/opt/musl-toolchain/bin" >> $GITHUB_PATH
 
-      - name: BIND9 风格预构建所有静态依赖
-        run: |
           PREFIX="/opt/musl-deps"
           mkdir -p $PREFIX/src && cd $PREFIX/src
-
-          # GMP
-          wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz && tar xf gmp-6.3.0.tar.xz && cd gmp-6.3.0
-          ./configure --host=aarch64-linux-musl --prefix=$PREFIX --enable-static --disable-shared --disable-assembly CFLAGS="-Os -static -fPIC"
-          make -j$(nproc) && make install && cd ..
-
-          # Nettle (解决 DNSSEC 常见问题)
-          wget -q https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz && tar xf nettle-3.10.tar.gz && cd nettle-3.10
-          ./configure --host=aarch64-linux-musl --prefix=$PREFIX --enable-static --disable-shared --disable-openssl CFLAGS="-Os -static -fPIC" LDFLAGS="-static"
-          make -j$(nproc) && make install && cd ..
-
-          # libunistring + libidn2
-          wget -q https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.xz && tar xf libunistring-1.3.tar.xz && cd libunistring-1.3
-          ./configure --host=aarch64-linux-musl --prefix=$PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC"
-          make -j$(nproc) && make install && cd ..
-          wget -q https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz && tar xf libidn2-2.3.7.tar.gz && cd libidn2-2.3.7
-          ./configure --host=aarch64-linux-musl --prefix=$PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC"
-          make -j$(nproc) && make install && cd ..
-
-          # SQLite3
-          wget -q https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz && tar xf sqlite-autoconf-3490100.tar.gz && cd sqlite-autoconf-3490100
-          ./configure --host=aarch64-linux-musl --prefix=$PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC"
-          make -j$(nproc) && make install && cd ..
+          # GMP / Nettle / libidn2 / SQLite3 完整静态编译（同 BIND9）
+          wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz && tar xf gmp-6.3.0.tar.xz && cd gmp-6.3.0 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
+          wget -q https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz && tar xf nettle-3.10.tar.gz && cd nettle-3.10 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" LDFLAGS="-static" && make -j \)(nproc) && make install && cd ..
+          wget -q https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.xz && tar xf libunistring-1.3.tar.xz && cd libunistring-1.3 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
+          wget -q https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz && tar xf libidn2-2.3.7.tar.gz && cd libidn2-2.3.7 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
+          wget -q https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz && tar xf sqlite-autoconf-3490100.tar.gz && cd sqlite-autoconf-3490100 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
 
           echo "PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: 编译全静态 pihole-FTL
+      - name: 编译静态 pihole-FTL
         run: |
           export CC=aarch64-linux-musl-gcc
-          export CFLAGS="-Os -pipe -fomit-frame-pointer -static -static-libgcc -fPIC -I/opt/musl-deps/include"
+          export CFLAGS="-Os -static -fPIC -I/opt/musl-deps/include"
           export LDFLAGS="-static -Wl,--gc-sections -L/opt/musl-deps/lib"
           export STATIC=true
-
           mkdir build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=$CC \
-            -DSTATIC=true \
-            -DENABLE_DNSSEC=OFF \
-            -DCMAKE_C_FLAGS="$CFLAGS" \
-            -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"
-          cmake --build . --target pihole-FTL -- -j$(nproc)
-
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DSTATIC=true -DENABLE_DNSSEC=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"
+          cmake --build . --target pihole-FTL -j$(nproc)
           aarch64-linux-musl-strip --strip-all pihole-FTL
-          mv pihole-FTL ../pihole-FTL-static-aarch64
-          cd ..
+          mv pihole-FTL ../pihole-FTL-static
 
-      # ==================== Zashboard + Magisk 模块打包 ====================
-      - name: 准备 Magisk 模块结构 + Zashboard
+      # ==================== 完整 Pi-hole + Zashboard + Magisk 模块 ====================
+      - name: 打包完整 Pi-hole Magisk 模块
         run: |
-          MODULE="pihole-magisk-module"
+          MODULE="pihole-full-magisk"
           mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www $MODULE/customize.d
 
-          # 静态 FTL
-          cp pihole-FTL-static-aarch64 $MODULE/system/bin/pihole-FTL
+          # 复制官方完整 Pi-hole 脚本（gravity.sh、pihole 命令等）
+          git clone --depth=1 https://github.com/pi-hole/pi-hole.git pihole-src
+          cp pihole-src/pihole $MODULE/system/bin/pihole
+          cp pihole-src/gravity.sh $MODULE/etc/pihole/
+          cp -r pihole-src/advanced/Scripts/* $MODULE/etc/pihole/ 2>/dev/null || true
+          chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
+
+          # 替换静态 FTL
+          cp pihole-FTL-static $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
-          # Zashboard（最新静态版）
-          wget -q https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip -O zashboard.zip
-          unzip zashboard.zip -d $MODULE/www
-          rm -rf $MODULE/www/src $MODULE/www/node_modules 2>/dev/null || true
+          # Zashboard 静态 Web（替换官方 admin）
+          wget -q https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip -O z.zip
+          unzip z.zip -d $MODULE/www
+          rm -rf $MODULE/www/src 2>/dev/null || true
 
           # module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-static-android
-          name=Pi-hole Static FTL + Zashboard (Magisk)
+          id=pihole-full-static-android
+          name=Pi-hole 完整版（静态 FTL + Zashboard）Magisk
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=Grok
-          description=静态 pihole-FTL + Zashboard Web，开机自启，适合 Android
+          author=社区定制
+          description=完整 Pi-hole（gravity 更新可用）+ Zashboard，开机自启，手机专用
           EOF
 
-          # service.sh（开机启动 FTL）
+          # service.sh 开机启动
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          /system/bin/pihole-FTL -d --webserver --webroot /data/adb/modules/pihole-static-android/www &
-          echo "Pi-hole FTL 已启动，Web: http://127.0.0.1/admin"
+          /system/bin/pihole-FTL -d --webserver --webroot /data/adb/modules/pihole-full-static-android/www &
+          echo "Pi-hole 完整版已启动 → http://127.0.0.1/admin"
           EOF
           chmod 755 $MODULE/service.sh
 
-          # post-fs-data.sh（权限 + gravity 初始化）
+          # post-fs-data.sh（权限 + 基础配置）
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
-          mkdir -p /etc/pihole /data/adb/modules/pihole-static-android/etc/pihole
-          cp -f /data/adb/modules/pihole-static-android/etc/pihole/* /etc/pihole/ 2>/dev/null || true
-          chmod 755 /system/bin/pihole-FTL
+          mkdir -p /etc/pihole
+          cp -f /data/adb/modules/pihole-full-static-android/etc/pihole/* /etc/pihole/ 2>/dev/null || true
+          chmod 755 /system/bin/pihole /system/bin/pihole-FTL
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
-          # 基础配置文件（已包含你之前推荐的广告规则）
+          # 预置广告规则（你之前推荐的）
           cat > $MODULE/etc/pihole/adlists.list << 'EOF'
           https://gitlab.com/hagezi/mirror/-/raw/main/dns-blocklists/adblock/pro.txt
           https://gitlab.com/hagezi/mirror/-/raw/main/dns-blocklists/adblock/multi.txt
@@ -130,39 +109,21 @@ jobs:
           https://v.firebog.net/hosts/AdguardDNS.txt
           EOF
 
-          # pihole.toml（手机优化版）
-          cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
-          [dns]
-            port = 53
-            blocking = true
-            block = "NXDOMAIN"
-            dnssec = false
-          [webserver]
-            port = "80"
-            interface = "0.0.0.0"
-          [database]
-            maxDBdays = 30
-          EOF
-
-          # 打包成 Magisk ZIP
+          # 打包 ZIP
           cd $MODULE
-          zip -r ../pihole-magisk-module.zip .
+          zip -r ../pihole-full-magisk-module.zip .
           cd ..
 
-      - name: 上传 Release（自动）
+      - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: magisk-${{ github.run_number }}
-          name: Pi-hole Static + Zashboard Magisk 模块 ${{ github.run_number }}
-          files: |
-            pihole-FTL-static-aarch64
-            pihole-magisk-module.zip
+          tag_name: full-magisk-${{ github.run_number }}
+          name: Pi-hole 完整版 Magisk 模块 ${{ github.run_number }}
+          files: pihole-full-magisk-module.zip
           draft: false
 
       - name: 上传 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pihole-magisk-android
-          path: |
-            pihole-FTL-static-aarch64
-            pihole-magisk-module.zip
+          name: pihole-full-magisk
+          path: pihole-full-magisk-module.zip
