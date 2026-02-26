@@ -1,8 +1,6 @@
-name: Pi-hole 完整版 Magisk 模块（官方 FTL + Zashboard）
+name: Pi-hole 完整 Magisk 模块（全新干净版）
 
 on:
-  schedule:
-    - cron: '0 16 * * *'   # 北京时间每天 00:00 自动更新最新版
   workflow_dispatch:
 
 permissions:
@@ -15,85 +13,85 @@ jobs:
       - name: 安装工具
         run: sudo apt-get update && sudo apt-get install -y wget curl unzip zip
 
-      # ==================== 下载官方最新 pihole-FTL-arm64 ====================
       - name: 下载官方 pihole-FTL-arm64
-        run: |
-          wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL
-          chmod +x pihole-FTL
-          echo "✅ 官方 FTL 下载完成，大小：$(ls -lh pihole-FTL | awk '{print $5}')"
+        run: wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL && chmod +x pihole-FTL
 
-      # ==================== 打包完整 Pi-hole Magisk 模块 ====================
-      - name: 构建 Magisk 模块（完整 Pi-hole + Zashboard）
+      - name: 构建 Magisk 模块
         run: |
-          MODULE="pihole-full-magisk"
-          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www
+          MODULE="pihole-full-magisk-clean"
+          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www $MODULE/log $MODULE/customize.d
 
-          # 官方 FTL
+          # FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
-          # 完整 Pi-hole 脚本（gravity 更新、pihole 命令全部可用）
-          git clone --depth=1 https://github.com/pi-hole/pi-hole.git pihole-src
-          cp pihole-src/pihole $MODULE/system/bin/pihole
-          cp pihole-src/gravity.sh $MODULE/etc/pihole/
-          cp -r pihole-src/advanced/Scripts/* $MODULE/etc/pihole/ 2>/dev/null || true
+          # Pi-hole 完整脚本
+          git clone --depth=1 https://github.com/pi-hole/pi-hole.git src
+          cp src/pihole $MODULE/system/bin/pihole
+          cp src/gravity.sh $MODULE/etc/pihole/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # Zashboard 静态 Web（现代漂亮界面）
+          # Zashboard (mihomo版) + 预适配 Pi-hole API
           wget -q https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip -O z.zip
           unzip z.zip -d $MODULE/www
-          rm -rf $MODULE/www/src 2>/dev/null || true
+          # 适配 Pi-hole API
+          find $MODULE/www -name "*.js" -exec sed -i 's|http[^"]*9090|http://127.0.0.1:5555/api|g' {} \;
+          find $MODULE/www -name "*.js" -exec sed -i 's|/control/|/api/|g' {} \;
+          echo 'window.API_BASE="/api";' >> $MODULE/www/index.html
 
           # module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-full-official
-          name=Pi-hole 完整版（官方 FTL + Zashboard）Magisk
+          id=pihole-full-clean
+          name=Pi-hole 完整版（官方FTL + Zashboard）Magisk
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=社区定制
-          description=官方 pihole-FTL + 完整脚本 + Zashboard，开机自启，gravity 更新可用
+          author=Clean Build
+          description=全新构建版，解决启动、端口、Zashboard适配问题
           EOF
 
-          # service.sh（开机自动启动）
-          cat > $MODULE/service.sh << 'EOF'
-          #!/system/bin/sh
-          /system/bin/pihole-FTL -d --webserver --webroot /data/adb/modules/pihole-full-official/www &
-          echo "Pi-hole 已启动 → 访问 http://127.0.0.1/admin"
-          EOF
-          chmod 755 $MODULE/service.sh
-
-          # post-fs-data.sh（权限 + 配置）
+          # post-fs-data.sh（关键：创建目录 + 复制配置）
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
-          mkdir -p /etc/pihole
-          cp -f /data/adb/modules/pihole-full-official/etc/pihole/* /etc/pihole/ 2>/dev/null || true
-          chmod 755 /system/bin/pihole /system/bin/pihole-FTL
+          mkdir -p /etc/pihole /data/adb/modules/pihole-full-clean/log
+          cp -f /data/adb/modules/pihole-full-clean/etc/pihole/pihole.toml /etc/pihole/pihole.toml
+          chmod 755 /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL
+          setcap 'cap_net_bind_service=+ep' /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL 2>/dev/null || true
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
-          # 预置你之前推荐的广告规则
-          cat > $MODULE/etc/pihole/adlists.list << 'EOF'
-          https://gitlab.com/hagezi/mirror/-/raw/main/dns-blocklists/adblock/pro.txt
-          https://gitlab.com/hagezi/mirror/-/raw/main/dns-blocklists/adblock/multi.txt
-          https://dbl.oisd.nl/
-          https://v.firebog.net/hosts/AdguardDNS.txt
+          # service.sh（极简可靠）
+          cat > $MODULE/service.sh << 'EOF'
+          #!/system/bin/sh
+          LOG=/data/adb/modules/pihole-full-clean/service.log
+          echo "=== FTL 启动 $(date) ===" > $LOG
+          /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL >> /data/adb/modules/pihole-full-clean/log/FTL.log 2>&1 &
+          echo "FTL PID: $!" >> $LOG
+          EOF
+          chmod 755 $MODULE/service.sh
+
+          # pihole.toml
+          cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
+          [webserver]
+            port = "5555"
+            interface = "0.0.0.0"
+            webroot = "/data/adb/modules/pihole-full-clean/www"
+          [dns]
+            port = 53
+            blocking = true
+            block = "NXDOMAIN"
+            dnssec = false
+          [files]
+            log = "/data/adb/modules/pihole-full-clean/log/FTL.log"
           EOF
 
-          # 打包 ZIP
           cd $MODULE
-          zip -r ../pihole-full-magisk-module.zip .
+          zip -r ../pihole-full-magisk-clean.zip .
           cd ..
 
-      - name: 上传到 Releases（自动）
+      - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: full-magisk-${{ github.run_number }}
-          name: Pi-hole 完整版 Magisk 模块（官方 FTL） ${{ github.run_number }}
-          files: pihole-full-magisk-module.zip
+          tag_name: clean-${{ github.run_number }}
+          name: Pi-hole 完整 Magisk 模块（全新构建版）
+          files: pihole-full-magisk-clean.zip
           draft: false
-
-      - name: 上传 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pihole-full-magisk
-          path: pihole-full-magisk-module.zip
