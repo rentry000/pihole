@@ -1,4 +1,4 @@
-name: Pi-hole 完整 Magisk 模块（全新干净版）
+name: Pi-hole 官方 Web UI Magisk 模块（最终修复版 - 软链接）
 
 on:
   workflow_dispatch:
@@ -10,88 +10,97 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: 安装工具
-        run: sudo apt-get update && sudo apt-get install -y wget curl unzip zip
-
-      - name: 下载官方 pihole-FTL-arm64
+      - name: 下载官方 FTL
         run: wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL && chmod +x pihole-FTL
 
-      - name: 构建 Magisk 模块
+      - name: 构建最终 Magisk 模块
         run: |
-          MODULE="pihole-full-magisk-clean"
-          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www $MODULE/log $MODULE/customize.d
+          MODULE="pihole-final-fix"
+          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www $MODULE/log
 
           # FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
-          # Pi-hole 完整脚本
+          # Pi-hole 官方脚本和 Web UI
           git clone --depth=1 https://github.com/pi-hole/pi-hole.git src
           cp src/pihole $MODULE/system/bin/pihole
           cp src/gravity.sh $MODULE/etc/pihole/
+          cp -r src/admin $MODULE/www/admin
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
-
-          # Zashboard (mihomo版) + 预适配 Pi-hole API
-          wget -q https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip -O z.zip
-          unzip z.zip -d $MODULE/www
-          # 适配 Pi-hole API
-          find $MODULE/www -name "*.js" -exec sed -i 's|http[^"]*9090|http://127.0.0.1:5555/api|g' {} \;
-          find $MODULE/www -name "*.js" -exec sed -i 's|/control/|/api/|g' {} \;
-          echo 'window.API_BASE="/api";' >> $MODULE/www/index.html
 
           # module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-full-clean
-          name=Pi-hole 完整版（官方FTL + Zashboard）Magisk
+          id=pihole-final-fix
+          name=Pi-hole 官方 Web UI（软链接修复版）
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=Clean Build
-          description=全新构建版，解决启动、端口、Zashboard适配问题
+          author=最终版
+          description=已合并软链接 + 日志固定 + 端口5555 + 官方WebUI
           EOF
 
-          # post-fs-data.sh（关键：创建目录 + 复制配置）
+          # post-fs-data.sh（关键：创建软链接）
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
-          mkdir -p /etc/pihole /data/adb/modules/pihole-full-clean/log
-          cp -f /data/adb/modules/pihole-full-clean/etc/pihole/pihole.toml /etc/pihole/pihole.toml
-          chmod 755 /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL
-          setcap 'cap_net_bind_service=+ep' /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL 2>/dev/null || true
+          MODDIR=${0%/*}
+
+          mkdir -p /etc/pihole
+          ln -sf $MODDIR/etc/pihole/pihole.toml /etc/pihole/pihole.toml
+
+          mkdir -p $MODDIR/log
+          chmod 777 $MODDIR/log
+
+          chmod 755 $MODDIR/system/bin/pihole-FTL
+          setcap 'cap_net_bind_service=+ep' $MODDIR/system/bin/pihole-FTL 2>/dev/null || true
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
           # service.sh（极简可靠）
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          LOG=/data/adb/modules/pihole-full-clean/service.log
-          echo "=== FTL 启动 $(date) ===" > $LOG
-          /data/adb/modules/pihole-full-clean/system/bin/pihole-FTL >> /data/adb/modules/pihole-full-clean/log/FTL.log 2>&1 &
-          echo "FTL PID: $!" >> $LOG
+          LOG=/data/adb/modules/pihole-final-fix/service.log
+          FTL_LOG=/data/adb/modules/pihole-final-fix/log/FTL.log
+
+          echo "=== Pi-hole FTL 启动 $(date) ===" > $LOG
+          echo "FTL PID 将在下方显示" >> $LOG
+
+          mkdir -p /data/adb/modules/pihole-final-fix/log
+          touch $FTL_LOG
+          chmod 666 $FTL_LOG
+
+          /data/adb/modules/pihole-final-fix/system/bin/pihole-FTL >> $FTL_LOG 2>&1 &
+
+          echo "FTL 已启动 PID: $!" >> $LOG
+          echo "访问地址: http://127.0.0.1:5555/admin" >> $LOG
           EOF
           chmod 755 $MODULE/service.sh
 
-          # pihole.toml
+          # pihole.toml（端口5555）
           cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
           [webserver]
             port = "5555"
             interface = "0.0.0.0"
-            webroot = "/data/adb/modules/pihole-full-clean/www"
+            webroot = "/data/adb/modules/pihole-final-fix/www/admin"
+
           [dns]
             port = 53
             blocking = true
             block = "NXDOMAIN"
             dnssec = false
+
           [files]
-            log = "/data/adb/modules/pihole-full-clean/log/FTL.log"
+            log = "/data/adb/modules/pihole-final-fix/log/FTL.log"
           EOF
 
+          # 打包
           cd $MODULE
-          zip -r ../pihole-full-magisk-clean.zip .
+          zip -r ../pihole-final-fix-magisk.zip .
           cd ..
 
       - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: clean-${{ github.run_number }}
-          name: Pi-hole 完整 Magisk 模块（全新构建版）
-          files: pihole-full-magisk-clean.zip
+          tag_name: final-fix-${{ github.run_number }}
+          name: Pi-hole 官方 Web UI Magisk（软链接最终版）
+          files: pihole-final-fix-magisk.zip
           draft: false
