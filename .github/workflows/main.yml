@@ -1,4 +1,4 @@
-name: Pi-hole 完整 Web UI Magisk 模块（方案一 - lighttpd + PHP 修复版）
+name: Pi-hole 完整 Web UI Magisk 模块（方案一 - static-web-server + PHP 版）
 
 on:
   workflow_dispatch:
@@ -13,69 +13,14 @@ jobs:
       - name: 下載官方 FTL
         run: wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL && chmod +x pihole-FTL
 
-      - name: 下載並編譯 lighttpd 1.4.82 靜態版（arm64-android）
+      - name: 下載 static-web-server aarch64-android 靜態 binary（最新 v2.41.0）
         run: |
-          # 安裝 autotools
-          sudo apt-get update -qq
-          sudo apt-get install -y autoconf automake libtool pkg-config m4 gettext
-
-          # 下載 NDK r25c (穩定版，很多專案用這個)
-          NDK_VER="r25c"
-          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip -O ndk.zip
-          unzip -q ndk.zip
-          mv android-ndk-${NDK_VER} /opt/ndk
-
-          # 設定 toolchain 環境變數（重點修正這裡）
-          export NDK=/opt/ndk
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export TARGET=aarch64-linux-android
-          export API=21
-          export CC="\( {TOOLCHAIN}/bin/ \){TARGET}${API}-clang"
-          export CXX="\( {TOOLCHAIN}/bin/ \){TARGET}${API}-clang++"
-          export AR="${TOOLCHAIN}/bin/llvm-ar"
-          export LD="${TOOLCHAIN}/bin/ld.lld"
-          export RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
-          export STRIP="${TOOLCHAIN}/bin/llvm-strip"
-
-          # 驗證 binary 是否存在（debug 用，可選）
-          ls -l "${CC}" || { echo "CC binary not found: ${CC}"; exit 1; }
-
-          # 下載 lighttpd 源碼
-          wget -q https://download.lighttpd.net/lighttpd/releases-1.4.x/lighttpd-1.4.82.tar.gz
-          tar -xzf lighttpd-1.4.82.tar.gz
-          cd lighttpd-1.4.82
-
-          # 生成 configure
-          ./autogen.sh || { echo "autogen.sh failed"; exit 1; }
-
-          # configure（調整為靜態，加入 sysroot 相關 flag）
-          ./configure \
-            --host=${TARGET} \
-            --build=x86_64-pc-linux-gnu \
-            --disable-shared \
-            --enable-static \
-            --disable-ipv6 \
-            --without-bzip2 \
-            --without-fam \
-            --without-ldap \
-            --without-lua \
-            --without-memcached \
-            --without-mysql \
-            --disable-webdav-locks \
-            --disable-webdav-props \
-            --with-openssl \
-            --with-zlib \
-            CFLAGS="-O2 -fPIC -I${NDK}/sysroot/usr/include/aarch64-linux-android" \
-            LDFLAGS="-static -L\( {NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/ \){API}" \
-            ac_cv_func_fork=yes \
-            ac_cv_func_vfork=no \
-            ac_cv_func_pipe2=no
-
-          make -j$(nproc)
-          ${STRIP} src/lighttpd
-          cp src/lighttpd ../lighttpd-static
-          chmod +x ../lighttpd-static
-          cd ..
+          wget -q https://github.com/static-web-server/static-web-server/releases/download/v2.41.0/static-web-server-v2.41.0-aarch64-linux-android.tar.gz -O sws.tar.gz
+          tar -xzf sws.tar.gz
+          mv static-web-server-v2.41.0-aarch64-linux-android/static-web-server sws-static
+          chmod +x sws-static
+          # 驗證（可選）
+          ./sws-static --version
 
       - name: 下載 PHP-CGI 靜態文件（你提供的連結）
         run: |
@@ -90,8 +35,8 @@ jobs:
 
       - name: 構建 Magisk 模塊
         run: |
-          MODULE="pihole-lighttpd-php"
-          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log $MODULE/etc/lighttpd
+          MODULE="pihole-sws-php"
+          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log
 
           # FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
@@ -103,57 +48,78 @@ jobs:
           cp src/gravity.sh $MODULE/etc/pihole/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # Web UI
+          # Web UI（靜態 + 動態部分）
           cp -r web-src/admin/* $MODULE/www/admin/
 
-          # lighttpd + PHP
-          cp lighttpd-static $MODULE/system/bin/lighttpd
+          # static-web-server + PHP-CGI
+          cp sws-static $MODULE/system/bin/static-web-server
           cp php-static/php-cgi-arm64 $MODULE/system/bin/php-cgi
-          chmod 755 $MODULE/system/bin/lighttpd $MODULE/system/bin/php-cgi
+          chmod 755 $MODULE/system/bin/static-web-server $MODULE/system/bin/php-cgi
 
-          # lighttpd.conf 配置（保持原樣）
-          cat > $MODULE/etc/lighttpd/lighttpd.conf << 'EOF'
-          server.document-root = "/data/adb/modules/pihole-lighttpd-php/www/admin"
-          server.port = 5555
-          server.bind = "0.0.0.0"
-          server.pid-file = "/data/adb/modules/pihole-lighttpd-php/log/lighttpd.pid"
-          server.errorlog = "/data/adb/modules/pihole-lighttpd-php/log/lighttpd.log"
-          server.modules = ( "mod_fastcgi" )
-
-          fastcgi.debug = 0
-          fastcgi.server = ( ".php" =>
-            ( "localhost" =>
-              ( "socket" => "/tmp/php-cgi.sock",
-                "bin-path" => "/data/adb/modules/pihole-lighttpd-php/system/bin/php-cgi",
-                "check-local" => "disable",
-                "max-procs" => 1
-              )
-            )
-          )
-          EOF
-
-          # module.prop（版本可改用日期）
+          # module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-lighttpd-php
-          name=Pi-hole 完整 Web UI (lighttpd + PHP)
+          id=pihole-sws-php
+          name=Pi-hole Web UI (static-web-server + PHP)
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=方案一修复版（lighttpd 1.4.82 自編譯）
-          description=FTL + lighttpd 1.4.82 static + PHP-CGI + 官方WebUI + 端口5555
+          author=方案一 - sws + PHP 版
+          description=FTL + static-web-server + PHP-CGI + 官方WebUI + 端口5555。支援完整動態功能。
           EOF
 
-          # post-fs-data.sh 和 service.sh 保持原樣（略）
+          # post-fs-data.sh
+          cat > $MODULE/post-fs-data.sh << 'EOF'
+          #!/system/bin/sh
+          MODDIR=${0%/*}
+          mkdir -p /etc/pihole
+          ln -sf $MODDIR/etc/pihole/pihole.toml /etc/pihole/pihole.toml
+          mkdir -p $MODDIR/log
+          chmod 777 $MODDIR/log
+          setcap 'cap_net_bind_service=+ep' $MODDIR/system/bin/pihole-FTL 2>/dev/null || true
+          setcap 'cap_net_bind_service=+ep' $MODDIR/system/bin/static-web-server 2>/dev/null || true
+          EOF
+          chmod 755 $MODULE/post-fs-data.sh
 
-          # ...（後續 post-fs-data.sh、service.sh、pihole.toml 的 cat 內容保持與原碼相同，此處省略重複貼上）
+          # service.sh - 先啟動 php-cgi，再啟動 static-web-server 並轉發 .php 請求
+          cat > $MODULE/service.sh << 'EOF'
+          #!/system/bin/sh
+          LOG=/data/adb/modules/pihole-sws-php/service.log
+          echo "=== Pi-hole 啟動 $(date) ===" > $LOG
+
+          /data/adb/modules/pihole-sws-php/system/bin/pihole-FTL >> $LOG 2>&1 &
+
+          # 啟動 PHP-CGI (綁定 unix socket)
+          /data/adb/modules/pihole-sws-php/system/bin/php-cgi -b /tmp/php-cgi.sock >> $LOG 2>&1 &
+
+          # 啟動 static-web-server 並啟用 fastcgi 轉發
+          /data/adb/modules/pihole-sws-php/system/bin/static-web-server \
+            --port 5555 \
+            --addr 0.0.0.0 \
+            --root /data/adb/modules/pihole-sws-php/www/admin \
+            --log-file /data/adb/modules/pihole-sws-php/log/sws.log \
+            --fcgi /tmp/php-cgi.sock:.php \
+            --log-level info \
+            --no-compression >> $LOG 2>&1 &
+
+          echo "static-web-server + PHP 已啟動，Web UI: http://127.0.0.1:5555/admin" >> $LOG
+          EOF
+          chmod 755 $MODULE/service.sh
+
+          cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
+          [dns]
+            port = 53
+            blocking = true
+            block = "NXDOMAIN"
+            dnssec = false
+          EOF
 
           cd $MODULE
-          zip -r ../pihole-lighttpd-php-magisk.zip .
+          zip -r ../pihole-sws-php-magisk.zip .
           cd ..
 
       - name: 上傳 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: lighttpd-1.4.82-${{ github.run_number }}
-          name: Pi-hole lighttpd 1.4.82 + PHP Magisk 模塊（自編譯版）
-          files: pihole-lighttpd-php-magisk.zip
+          tag_name: sws-php-${{ github.run_number }}
+          name: Pi-hole static-web-server + PHP Magisk 模塊
+          files: pihole-sws-php-magisk.zip
           draft: false
