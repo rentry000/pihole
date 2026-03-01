@@ -15,51 +15,61 @@ jobs:
 
       - name: 下載並編譯 lighttpd 1.4.82 靜態版（arm64-android）
         run: |
-          # 下載 Android NDK (r27 為例，較新且穩定)
-          NDK_VER="r27"
+          # 先安裝 autotools（autoconf、automake、libtool 等），lighttpd 需要這些來生成 configure
+          sudo apt-get update -qq
+          sudo apt-get install -y autoconf automake libtool pkg-config
+
+          # 下載 Android NDK (使用 r25c 較穩定，很多專案用這個版本；r27 也可以但有些 toolchain 路徑微調)
+          NDK_VER="r25c"
           wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip -O ndk.zip
           unzip -q ndk.zip
           mv android-ndk-${NDK_VER} /opt/ndk
-          
+
           # 設定 toolchain (aarch64-linux-android)
           export NDK=/opt/ndk
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
-          export API=21  # Android 最低 API，可依需求調高
+          export API=21                  # 最低支援 Android 5.0，Magisk 模組通常夠用
           export AR=$TOOLCHAIN/bin/llvm-ar
-          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
-          export CXX=$TOOLCHAIN/bin/$TARGET$API-clang++
+          export CC=\( TOOLCHAIN/bin/ \){TARGET}${API}-clang
+          export CXX=\( TOOLCHAIN/bin/ \){TARGET}${API}-clang++
           export LD=$TOOLCHAIN/bin/ld.lld
           export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
           export STRIP=$TOOLCHAIN/bin/llvm-strip
-          
+
           # 下載 lighttpd 源碼
           wget -q https://download.lighttpd.net/lighttpd/releases-1.4.x/lighttpd-1.4.82.tar.gz
           tar -xzf lighttpd-1.4.82.tar.gz
           cd lighttpd-1.4.82
-          
-          # 設定 configure 為靜態編譯，禁用共享庫，針對 Android 調整
+
+          # 關鍵：生成 configure 腳本
+          ./autogen.sh
+
+          # 現在才能執行 configure，針對靜態 + Android 調整
           ./configure \
-            --host=$TARGET \
-            --prefix=/data/adb/modules/pihole-lighttpd-php \
+            --host=${TARGET} \
+            --build=x86_64-linux-gnu \
+            --prefix=/ \
             --disable-shared \
             --enable-static \
+            --disable-ipv6 \
             --without-bzip2 \
             --without-fam \
             --without-ldap \
             --without-lua \
             --without-memcached \
             --without-mysql \
-            --without-webdav-props \
+            --disable-webdav-locks \
+            --disable-webdav-props \
             --with-openssl \
-            CFLAGS="-O2 -fPIC -static" \
-            LDFLAGS="-static -lc -lm -ldl" \
+            CFLAGS="-O2 -fPIC -static -I${NDK}/sysroot/usr/include" \
+            LDFLAGS="-static -lc -lm -ldl -L\( {NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/ \){API}" \
             ac_cv_func_fork=yes \
             ac_cv_func_vfork=no \
             ac_cv_func_pipe2=no
-          
+
           make -j$(nproc)
-          $STRIP src/lighttpd
+          ${STRIP} src/lighttpd
           cp src/lighttpd ../lighttpd-static
           chmod +x ../lighttpd-static
           cd ..
