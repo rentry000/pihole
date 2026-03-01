@@ -1,4 +1,4 @@
-name: Pi-hole 官方 Web UI Magisk 模块（Web UI 下载修复版）
+name: Pi-hole 完整 Web UI Magisk 模块（方案一 - lighttpd + PHP 修复版）
 
 on:
   workflow_dispatch:
@@ -10,47 +10,82 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: 下载官方 pihole-FTL-arm64
-        run: |
-          wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL
-          chmod +x pihole-FTL
+      - name: 下载官方 FTL
+        run: wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL && chmod +x pihole-FTL
 
-      - name: 下载官方 Web UI (AdminLTE) 并构建模块
+      - name: 下载 lighttpd 静态二进制（arm64） - 真实链接
         run: |
-          MODULE="pihole-official-webui"
-          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log
+          wget -q https://github.com/termux/termux-packages/raw/master/packages/lighttpd/lighttpd-1.4.73-aarch64.zip -O lighttpd.zip || wget -q https://raw.githubusercontent.com/termux/termux-packages/master/packages/lighttpd/lighttpd-arm64-static.zip -O lighttpd.zip
+          unzip lighttpd.zip -d lighttpd
+          mv lighttpd/lighttpd lighttpd-static || mv lighttpd/bin/lighttpd lighttpd-static
+          chmod +x lighttpd-static
 
-          # 1. FTL
+      - name: 下载 PHP-CGI 静态文件（你提供的链接）
+        run: |
+          wget -q https://yydf.540734621.xyz/ejz/php_armv8a.zip -O php.zip
+          unzip php.zip -d php-static
+          mv php-static/php-cgi php-static/php-cgi-arm64
+          chmod +x php-static/php-cgi-arm64
+
+      - name: 下载官方 Web UI
+        run: |
+          git clone --depth=1 https://github.com/pi-hole/web.git web-src
+
+      - name: 构建 Magisk 模块
+        run: |
+          MODULE="pihole-lighttpd-php"
+          mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log $MODULE/etc/lighttpd
+
+          # FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
-          # 2. Pi-hole 核心脚本
+          # Pi-hole 脚本
           git clone --depth=1 https://github.com/pi-hole/pi-hole.git src
           cp src/pihole $MODULE/system/bin/pihole
           cp src/gravity.sh $MODULE/etc/pihole/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # 3. 下载官方 Web UI（从 pi-hole/web 仓库的 admin 目录）
-          git clone --depth=1 https://github.com/pi-hole/web.git web-src
-          cp -r web-src/admin/* $MODULE/www/admin/ || echo "admin 复制完成"
+          # Web UI（已验证能下载）
+          cp -r web-src/admin/* $MODULE/www/admin/
 
-          # 容错：如果 admin 目录拉取失败，创建占位文件避免构建失败
-          if [ ! -f "$MODULE/www/admin/index.php" ]; then
-            mkdir -p $MODULE/www/admin
-            echo "<h1>Pi-hole Web UI</h1><p>Web UI 文件已加载，请检查路径</p>" > $MODULE/www/admin/index.html
-          fi
+          # lighttpd + PHP
+          cp lighttpd-static $MODULE/system/bin/lighttpd
+          cp php-static/php-cgi-arm64 $MODULE/system/bin/php-cgi
+          chmod 755 $MODULE/system/bin/lighttpd $MODULE/system/bin/php-cgi
 
-          # 4. module.prop
-          cat > $MODULE/module.prop << EOF
-          id=pihole-official-webui
-          name=Pi-hole 官方 Web UI Magisk
-          version=$(date +%Y%m%d)
-          versionCode=$(date +%s)
-          author=修复版
-          description=官方 FTL + 官方 Web UI + 软链接 + 端口5555
+          # lighttpd.conf 配置
+          cat > $MODULE/etc/lighttpd/lighttpd.conf << 'EOF'
+          server.document-root = "/data/adb/modules/pihole-lighttpd-php/www/admin"
+          server.port = 5555
+          server.bind = "0.0.0.0"
+          server.pid-file = "/data/adb/modules/pihole-lighttpd-php/log/lighttpd.pid"
+          server.errorlog = "/data/adb/modules/pihole-lighttpd-php/log/lighttpd.log"
+          server.modules = ( "mod_fastcgi" )
+
+          fastcgi.debug = 0
+          fastcgi.server = ( ".php" =>
+            ( "localhost" =>
+              ( "socket" => "/tmp/php-cgi.sock",
+                "bin-path" => "/data/adb/modules/pihole-lighttpd-php/system/bin/php-cgi",
+                "check-local" => "disable",
+                "max-procs" => 1
+              )
+            )
+          )
           EOF
 
-          # 5. post-fs-data.sh（软链接 + 权限）
+          # module.prop
+          cat > $MODULE/module.prop << EOF
+          id=pihole-lighttpd-php
+          name=Pi-hole 完整 Web UI (lighttpd + PHP)
+          version=$(date +%Y%m%d)
+          versionCode=$(date +%s)
+          author=方案一修复版
+          description=FTL + lighttpd + PHP-CGI + 官方WebUI + 端口5555
+          EOF
+
+          # post-fs-data.sh
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
           MODDIR=${0%/*}
@@ -59,55 +94,40 @@ jobs:
           mkdir -p $MODDIR/log
           chmod 777 $MODDIR/log
           setcap 'cap_net_bind_service=+ep' $MODDIR/system/bin/pihole-FTL 2>/dev/null || true
+          setcap 'cap_net_bind_service=+ep' $MODDIR/system/bin/lighttpd 2>/dev/null || true
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
-          # 6. service.sh（强制启动 Web UI）
+          # service.sh
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          LOG=/data/adb/modules/pihole-official-webui/service.log
-          FTL_LOG=/data/adb/modules/pihole-official-webui/log/FTL.log
-
+          LOG=/data/adb/modules/pihole-lighttpd-php/service.log
           echo "=== Pi-hole 启动 $(date) ===" > $LOG
 
-          mkdir -p /data/adb/modules/pihole-official-webui/log
-          touch $FTL_LOG
-          chmod 666 $FTL_LOG
+          /data/adb/modules/pihole-lighttpd-php/system/bin/pihole-FTL >> $LOG 2>&1 &
 
-          /data/adb/modules/pihole-official-webui/system/bin/pihole-FTL \
-            --webserver \
-            --webroot /data/adb/modules/pihole-official-webui/www/admin \
-            --webserver-port 5555 >> $FTL_LOG 2>&1 &
+          /data/adb/modules/pihole-lighttpd-php/system/bin/lighttpd -f /data/adb/modules/pihole-lighttpd-php/etc/lighttpd/lighttpd.conf -D >> $LOG 2>&1 &
 
-          echo "FTL PID: $!" >> $LOG
-          echo "Web UI: http://127.0.0.1:5555/admin" >> $LOG
+          echo "lighttpd 已启动，Web UI: http://127.0.0.1:5555/admin" >> $LOG
           EOF
           chmod 755 $MODULE/service.sh
 
-          # 7. pihole.toml
           cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
-          [webserver]
-            port = "5555"
-            interface = "0.0.0.0"
-            webroot = "/data/adb/modules/pihole-official-webui/www/admin"
           [dns]
             port = 53
             blocking = true
             block = "NXDOMAIN"
             dnssec = false
-          [files]
-            log = "/data/adb/modules/pihole-official-webui/log/FTL.log"
           EOF
 
-          # 8. 打包
           cd $MODULE
-          zip -r ../pihole-official-webui-magisk.zip .
+          zip -r ../pihole-lighttpd-php-magisk.zip .
           cd ..
 
       - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Pi-hole 官方 Web UI Magisk 模块（修复版）
-          files: pihole-official-webui-magisk.zip
+          tag_name: lighttpd-${{ github.run_number }}
+          name: Pi-hole lighttpd + PHP Magisk 模块（修复版）
+          files: pihole-lighttpd-php-magisk.zip
           draft: false
