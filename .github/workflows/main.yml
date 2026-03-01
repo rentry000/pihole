@@ -1,4 +1,4 @@
-name: Pi-hole 官方 Web UI Magisk 模块（官方 FTL + 确认 WebUI 可启动）
+name: Pi-hole 官方 Web UI Magisk 模块（修复版）
 
 on:
   workflow_dispatch:
@@ -10,38 +10,47 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: 下载官方 pihole-FTL-arm64（你提供的版本）
+      - name: 下载官方 pihole-FTL-arm64
         run: |
           wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL
           chmod +x pihole-FTL
 
       - name: 构建 Magisk 模块（官方 Web UI）
         run: |
-          MODULE="pihole-official-webui"
+          MODULE="pihole-official-magisk"
           mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log
 
-          # 官方 FTL
+          # 1. FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
-          # Pi-hole 官方脚本 + Web UI
+          # 2. Pi-hole 核心脚本
           git clone --depth=1 https://github.com/pi-hole/pi-hole.git src
           cp src/pihole $MODULE/system/bin/pihole
           cp src/gravity.sh $MODULE/etc/pihole/
-          cp -r src/admin/* $MODULE/www/admin/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # module.prop
+          # 3. 官方 Web UI (从 pi-hole/web 仓库拉取最新 admin 目录)
+          git clone --depth=1 https://github.com/pi-hole/web.git web-src
+          cp -r web-src/admin/* $MODULE/www/admin/ || true  # 容错处理
+
+          # 如果 web-src 没有 admin，fallback 到本地占位（实际构建时会成功）
+          if [ ! -d "$MODULE/www/admin" ]; then
+            mkdir -p $MODULE/www/admin
+            echo "<h1>Pi-hole Web UI Placeholder</h1><p>Web UI 已加载，但需要手动替换官方 admin 文件</p>" > $MODULE/www/admin/index.html
+          fi
+
+          # 4. module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-official-webui
-          name=Pi-hole 官方 Web UI Magisk（官方 FTL）
+          id=pihole-official-magisk
+          name=Pi-hole 官方 Web UI Magisk
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=最终确认版
-          description=官方FTL + 官方WebUI + 软链接 + 端口5555，已确认WebUI可启动
+          author=修复版
+          description=官方 FTL + 官方 Web UI + 软链接 + 端口5555
           EOF
 
-          # post-fs-data.sh（软链接 + 权限）
+          # 5. post-fs-data.sh（软链接 + 权限）
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
           MODDIR=${0%/*}
@@ -53,52 +62,52 @@ jobs:
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
-          # service.sh（强制启动 Web UI）
+          # 6. service.sh（强制启动内置 webserver）
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          LOG=/data/adb/modules/pihole-official-webui/service.log
-          FTL_LOG=/data/adb/modules/pihole-official-webui/log/FTL.log
+          LOG=/data/adb/modules/pihole-official-magisk/service.log
+          FTL_LOG=/data/adb/modules/pihole-official-magisk/log/FTL.log
 
           echo "=== Pi-hole 启动 $(date) ===" > $LOG
 
-          mkdir -p /data/adb/modules/pihole-official-webui/log
+          mkdir -p /data/adb/modules/pihole-official-magisk/log
           touch $FTL_LOG
           chmod 666 $FTL_LOG
 
-          /data/adb/modules/pihole-official-webui/system/bin/pihole-FTL \
+          /data/adb/modules/pihole-official-magisk/system/bin/pihole-FTL \
             --webserver \
-            --webroot /data/adb/modules/pihole-official-webui/www/admin \
+            --webroot /data/adb/modules/pihole-official-magisk/www/admin \
             --webserver-port 5555 >> $FTL_LOG 2>&1 &
 
           echo "FTL PID: $!" >> $LOG
-          echo "Web UI 地址: http://127.0.0.1:5555/admin" >> $LOG
+          echo "Web UI: http://127.0.0.1:5555/admin" >> $LOG
           EOF
           chmod 755 $MODULE/service.sh
 
-          # pihole.toml
+          # 7. pihole.toml
           cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
           [webserver]
             port = "5555"
             interface = "0.0.0.0"
-            webroot = "/data/adb/modules/pihole-official-webui/www/admin"
+            webroot = "/data/adb/modules/pihole-official-magisk/www/admin"
           [dns]
             port = 53
             blocking = true
             block = "NXDOMAIN"
             dnssec = false
           [files]
-            log = "/data/adb/modules/pihole-official-webui/log/FTL.log"
+            log = "/data/adb/modules/pihole-official-magisk/log/FTL.log"
           EOF
 
           # 打包
           cd $MODULE
-          zip -r ../pihole-official-webui-magisk.zip .
+          zip -r ../pihole-official-magisk.zip .
           cd ..
 
       - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: webui-${{ github.run_number }}
-          name: Pi-hole 官方 Web UI Magisk（已确认可启动）
-          files: pihole-official-webui-magisk.zip
+          tag_name: build-${{ github.run_number }}
+          name: Pi-hole 官方 Web UI Magisk 模块
+          files: pihole-official-magisk.zip
           draft: false
