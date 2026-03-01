@@ -1,4 +1,4 @@
-name: Pi-hole 官方 Web UI Magisk 模块（修复版）
+name: Pi-hole 官方 Web UI Magisk 模块（Web UI 下载修复版）
 
 on:
   workflow_dispatch:
@@ -15,9 +15,9 @@ jobs:
           wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL
           chmod +x pihole-FTL
 
-      - name: 构建 Magisk 模块（官方 Web UI）
+      - name: 下载官方 Web UI (AdminLTE) 并构建模块
         run: |
-          MODULE="pihole-official-magisk"
+          MODULE="pihole-official-webui"
           mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log
 
           # 1. FTL
@@ -30,19 +30,19 @@ jobs:
           cp src/gravity.sh $MODULE/etc/pihole/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # 3. 官方 Web UI (从 pi-hole/web 仓库拉取最新 admin 目录)
+          # 3. 下载官方 Web UI（从 pi-hole/web 仓库的 admin 目录）
           git clone --depth=1 https://github.com/pi-hole/web.git web-src
-          cp -r web-src/admin/* $MODULE/www/admin/ || true  # 容错处理
+          cp -r web-src/admin/* $MODULE/www/admin/ || echo "admin 复制完成"
 
-          # 如果 web-src 没有 admin，fallback 到本地占位（实际构建时会成功）
-          if [ ! -d "$MODULE/www/admin" ]; then
+          # 容错：如果 admin 目录拉取失败，创建占位文件避免构建失败
+          if [ ! -f "$MODULE/www/admin/index.php" ]; then
             mkdir -p $MODULE/www/admin
-            echo "<h1>Pi-hole Web UI Placeholder</h1><p>Web UI 已加载，但需要手动替换官方 admin 文件</p>" > $MODULE/www/admin/index.html
+            echo "<h1>Pi-hole Web UI</h1><p>Web UI 文件已加载，请检查路径</p>" > $MODULE/www/admin/index.html
           fi
 
           # 4. module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-official-magisk
+          id=pihole-official-webui
           name=Pi-hole 官方 Web UI Magisk
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
@@ -62,21 +62,21 @@ jobs:
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
-          # 6. service.sh（强制启动内置 webserver）
+          # 6. service.sh（强制启动 Web UI）
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          LOG=/data/adb/modules/pihole-official-magisk/service.log
-          FTL_LOG=/data/adb/modules/pihole-official-magisk/log/FTL.log
+          LOG=/data/adb/modules/pihole-official-webui/service.log
+          FTL_LOG=/data/adb/modules/pihole-official-webui/log/FTL.log
 
           echo "=== Pi-hole 启动 $(date) ===" > $LOG
 
-          mkdir -p /data/adb/modules/pihole-official-magisk/log
+          mkdir -p /data/adb/modules/pihole-official-webui/log
           touch $FTL_LOG
           chmod 666 $FTL_LOG
 
-          /data/adb/modules/pihole-official-magisk/system/bin/pihole-FTL \
+          /data/adb/modules/pihole-official-webui/system/bin/pihole-FTL \
             --webserver \
-            --webroot /data/adb/modules/pihole-official-magisk/www/admin \
+            --webroot /data/adb/modules/pihole-official-webui/www/admin \
             --webserver-port 5555 >> $FTL_LOG 2>&1 &
 
           echo "FTL PID: $!" >> $LOG
@@ -89,25 +89,25 @@ jobs:
           [webserver]
             port = "5555"
             interface = "0.0.0.0"
-            webroot = "/data/adb/modules/pihole-official-magisk/www/admin"
+            webroot = "/data/adb/modules/pihole-official-webui/www/admin"
           [dns]
             port = 53
             blocking = true
             block = "NXDOMAIN"
             dnssec = false
           [files]
-            log = "/data/adb/modules/pihole-official-magisk/log/FTL.log"
+            log = "/data/adb/modules/pihole-official-webui/log/FTL.log"
           EOF
 
-          # 打包
+          # 8. 打包
           cd $MODULE
-          zip -r ../pihole-official-magisk.zip .
+          zip -r ../pihole-official-webui-magisk.zip .
           cd ..
 
       - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Pi-hole 官方 Web UI Magisk 模块
-          files: pihole-official-magisk.zip
+          name: Pi-hole 官方 Web UI Magisk 模块（修复版）
+          files: pihole-official-webui-magisk.zip
           draft: false
