@@ -15,41 +15,43 @@ jobs:
 
       - name: 下載並編譯 lighttpd 1.4.82 靜態版（arm64-android）
         run: |
-          # 先安裝 autotools（autoconf、automake、libtool 等），lighttpd 需要這些來生成 configure
+          # 安裝 autotools
           sudo apt-get update -qq
-          sudo apt-get install -y autoconf automake libtool pkg-config
+          sudo apt-get install -y autoconf automake libtool pkg-config m4 gettext
 
-          # 下載 Android NDK (使用 r25c 較穩定，很多專案用這個版本；r27 也可以但有些 toolchain 路徑微調)
+          # 下載 NDK r25c (穩定版，很多專案用這個)
           NDK_VER="r25c"
           wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip -O ndk.zip
           unzip -q ndk.zip
           mv android-ndk-${NDK_VER} /opt/ndk
 
-          # 設定 toolchain (aarch64-linux-android)
+          # 設定 toolchain 環境變數（重點修正這裡）
           export NDK=/opt/ndk
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
-          export API=21                  # 最低支援 Android 5.0，Magisk 模組通常夠用
-          export AR=$TOOLCHAIN/bin/llvm-ar
-          export CC=\( TOOLCHAIN/bin/ \){TARGET}${API}-clang
-          export CXX=\( TOOLCHAIN/bin/ \){TARGET}${API}-clang++
-          export LD=$TOOLCHAIN/bin/ld.lld
-          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
-          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          export API=21
+          export CC="\( {TOOLCHAIN}/bin/ \){TARGET}${API}-clang"
+          export CXX="\( {TOOLCHAIN}/bin/ \){TARGET}${API}-clang++"
+          export AR="${TOOLCHAIN}/bin/llvm-ar"
+          export LD="${TOOLCHAIN}/bin/ld.lld"
+          export RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
+          export STRIP="${TOOLCHAIN}/bin/llvm-strip"
+
+          # 驗證 binary 是否存在（debug 用，可選）
+          ls -l "${CC}" || { echo "CC binary not found: ${CC}"; exit 1; }
 
           # 下載 lighttpd 源碼
           wget -q https://download.lighttpd.net/lighttpd/releases-1.4.x/lighttpd-1.4.82.tar.gz
           tar -xzf lighttpd-1.4.82.tar.gz
           cd lighttpd-1.4.82
 
-          # 關鍵：生成 configure 腳本
-          ./autogen.sh
+          # 生成 configure
+          ./autogen.sh || { echo "autogen.sh failed"; exit 1; }
 
-          # 現在才能執行 configure，針對靜態 + Android 調整
+          # configure（調整為靜態，加入 sysroot 相關 flag）
           ./configure \
             --host=${TARGET} \
-            --build=x86_64-linux-gnu \
-            --prefix=/ \
+            --build=x86_64-pc-linux-gnu \
             --disable-shared \
             --enable-static \
             --disable-ipv6 \
@@ -62,8 +64,9 @@ jobs:
             --disable-webdav-locks \
             --disable-webdav-props \
             --with-openssl \
-            CFLAGS="-O2 -fPIC -static -I${NDK}/sysroot/usr/include" \
-            LDFLAGS="-static -lc -lm -ldl -L\( {NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/ \){API}" \
+            --with-zlib \
+            CFLAGS="-O2 -fPIC -I${NDK}/sysroot/usr/include/aarch64-linux-android" \
+            LDFLAGS="-static -L\( {NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/ \){API}" \
             ac_cv_func_fork=yes \
             ac_cv_func_vfork=no \
             ac_cv_func_pipe2=no
