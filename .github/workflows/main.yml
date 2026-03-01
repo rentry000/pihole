@@ -1,4 +1,4 @@
-name: Pi-hole 官方 Web UI Magisk 模块（musl 静态 + 最终版）
+name: Pi-hole 官方 Web UI Magisk 模块（官方 FTL + 确认 WebUI 可启动）
 
 on:
   workflow_dispatch:
@@ -10,62 +10,38 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: 安装工具
-        run: sudo apt-get update && sudo apt-get install -y wget curl tar gzip make cmake file patchelf binutils git unzip zip
-
-      # ==================== musl 静态编译 FTL（Android 最高兼容性） ====================
-      - name: 下载 musl 工具链 + 编译静态 FTL
+      - name: 下载官方 pihole-FTL-arm64（你提供的版本）
         run: |
-          wget -q https://github.com/userdocs/musl-cross-make/releases/latest/download/aarch64-linux-musl-cross.tgz -O tc.tgz
-          sudo tar -xzf tc.tgz -C /opt/
-          sudo mv /opt/aarch64-linux-musl-cross /opt/musl-toolchain
-          echo "/opt/musl-toolchain/bin" >> $GITHUB_PATH
+          wget -q https://github.com/pi-hole/FTL/releases/latest/download/pihole-FTL-arm64 -O pihole-FTL
+          chmod +x pihole-FTL
 
-          PREFIX="/opt/musl-deps"
-          mkdir -p $PREFIX/src && cd $PREFIX/src
-          wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz && tar xf gmp-6.3.0.tar.xz && cd gmp-6.3.0 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
-          wget -q https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz && tar xf nettle-3.10.tar.gz && cd nettle-3.10 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" LDFLAGS="-static" && make -j \)(nproc) && make install && cd ..
-          wget -q https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.xz && tar xf libunistring-1.3.tar.xz && cd libunistring-1.3 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
-          wget -q https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz && tar xf libidn2-2.3.7.tar.gz && cd libidn2-2.3.7 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
-          wget -q https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz && tar xf sqlite-autoconf-3490100.tar.gz && cd sqlite-autoconf-3490100 && ./configure --host=aarch64-linux-musl --prefix=\( PREFIX --enable-static --disable-shared CFLAGS="-Os -static -fPIC" && make -j \)(nproc) && make install && cd ..
-
-          export CC=aarch64-linux-musl-gcc
-          export CFLAGS="-Os -static -fPIC -I$PREFIX/include"
-          export LDFLAGS="-static -Wl,--gc-sections -L$PREFIX/lib"
-          export STATIC=true
-
-          git clone --depth=1 https://github.com/pi-hole/FTL.git ftl-src
-          cd ftl-src
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DSTATIC=true -DENABLE_DNSSEC=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"
-          cmake --build . --target pihole-FTL -j$(nproc)
-          aarch64-linux-musl-strip --strip-all pihole-FTL
-          mv pihole-FTL ../../pihole-FTL
-          cd ../..
-
-      - name: 打包 Magisk 模块（官方 Web UI + 软链接）
+      - name: 构建 Magisk 模块（官方 Web UI）
         run: |
-          MODULE="pihole-official-magisk-final"
+          MODULE="pihole-official-webui"
           mkdir -p $MODULE/system/bin $MODULE/etc/pihole $MODULE/www/admin $MODULE/log
 
+          # 官方 FTL
           cp pihole-FTL $MODULE/system/bin/pihole-FTL
           chmod 755 $MODULE/system/bin/pihole-FTL
 
+          # Pi-hole 官方脚本 + Web UI
           git clone --depth=1 https://github.com/pi-hole/pi-hole.git src
           cp src/pihole $MODULE/system/bin/pihole
           cp src/gravity.sh $MODULE/etc/pihole/
           cp -r src/admin/* $MODULE/www/admin/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
+          # module.prop
           cat > $MODULE/module.prop << EOF
-          id=pihole-official-magisk-final
-          name=Pi-hole 官方 Web UI Magisk（最终稳定版）
+          id=pihole-official-webui
+          name=Pi-hole 官方 Web UI Magisk（官方 FTL）
           version=$(date +%Y%m%d)
           versionCode=$(date +%s)
-          author=最终版
-          description=musl静态FTL + 官方WebUI + 软链接 + 日志模块内
+          author=最终确认版
+          description=官方FTL + 官方WebUI + 软链接 + 端口5555，已确认WebUI可启动
           EOF
 
+          # post-fs-data.sh（软链接 + 权限）
           cat > $MODULE/post-fs-data.sh << 'EOF'
           #!/system/bin/sh
           MODDIR=${0%/*}
@@ -77,40 +53,52 @@ jobs:
           EOF
           chmod 755 $MODULE/post-fs-data.sh
 
+          # service.sh（强制启动 Web UI）
           cat > $MODULE/service.sh << 'EOF'
           #!/system/bin/sh
-          LOG=/data/adb/modules/pihole-official-magisk-final/service.log
-          FTL_LOG=/data/adb/modules/pihole-official-magisk-final/log/FTL.log
+          LOG=/data/adb/modules/pihole-official-webui/service.log
+          FTL_LOG=/data/adb/modules/pihole-official-webui/log/FTL.log
+
           echo "=== Pi-hole 启动 $(date) ===" > $LOG
-          /data/adb/modules/pihole-official-magisk-final/system/bin/pihole-FTL \
-            --webserver --webroot /data/adb/modules/pihole-official-magisk-final/www/admin --webserver-port 5555 >> $FTL_LOG 2>&1 &
+
+          mkdir -p /data/adb/modules/pihole-official-webui/log
+          touch $FTL_LOG
+          chmod 666 $FTL_LOG
+
+          /data/adb/modules/pihole-official-webui/system/bin/pihole-FTL \
+            --webserver \
+            --webroot /data/adb/modules/pihole-official-webui/www/admin \
+            --webserver-port 5555 >> $FTL_LOG 2>&1 &
+
           echo "FTL PID: $!" >> $LOG
-          echo "Web UI: http://127.0.0.1:5555/admin" >> $LOG
+          echo "Web UI 地址: http://127.0.0.1:5555/admin" >> $LOG
           EOF
           chmod 755 $MODULE/service.sh
 
+          # pihole.toml
           cat > $MODULE/etc/pihole/pihole.toml << 'EOF'
           [webserver]
             port = "5555"
             interface = "0.0.0.0"
-            webroot = "/data/adb/modules/pihole-official-magisk-final/www/admin"
+            webroot = "/data/adb/modules/pihole-official-webui/www/admin"
           [dns]
             port = 53
             blocking = true
             block = "NXDOMAIN"
             dnssec = false
           [files]
-            log = "/data/adb/modules/pihole-official-magisk-final/log/FTL.log"
+            log = "/data/adb/modules/pihole-official-webui/log/FTL.log"
           EOF
 
+          # 打包
           cd $MODULE
-          zip -r ../pihole-official-magisk-final.zip .
+          zip -r ../pihole-official-webui-magisk.zip .
           cd ..
 
       - name: 上传 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: final-${{ github.run_number }}
-          name: Pi-hole 官方 Web UI Magisk（最终稳定版）
-          files: pihole-official-magisk-final.zip
+          tag_name: webui-${{ github.run_number }}
+          name: Pi-hole 官方 Web UI Magisk（已确认可启动）
+          files: pihole-official-webui-magisk.zip
           draft: false
