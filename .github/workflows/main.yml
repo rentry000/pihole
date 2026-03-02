@@ -19,8 +19,7 @@ jobs:
           tar -xzf sws.tar.gz
           mv static-web-server-v2.41.0-aarch64-linux-android/static-web-server sws-static
           chmod +x sws-static
-          # 驗證（可選）
-          ./sws-static --version
+          
 
       - name: 下載 PHP-CGI 靜態文件（你提供的連結）
         run: |
