@@ -15,7 +15,7 @@ jobs:
 
       - name: 下載 static-web-server aarch64-android 靜態 binary（最新 v2.41.0）
         run: |
-          wget -q https://release-assets.githubusercontent.com/github-production-release-asset/205869004/31d9ecca-7fde-46f1-94b5-0a454fbeac6f?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-03-02T03%3A55%3A23Z&rscd=attachment%3B+filename%3Dstatic-web-server-v2.41.0-aarch64-linux-android.tar.gz&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-03-02T02%3A55%3A13Z&ske=2026-03-02T03%3A55%3A23Z&sks=b&skv=2018-11-09&sig=TfAp%2FhBkWWl2GJBetEByNvoLS5LD4FS%2FxqQ3oHp2JLE%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc3MjQyMDQxMywibmJmIjoxNzcyNDIwMTEzLCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.PzcAIgiynQWS8RPi88ArsprjaM7s0xv5qkEGlYfH7b0&response-content-disposition=attachment%3B%20filename%3Dstatic-web-server-v2.41.0-aarch64-linux-android.tar.gz&response-content-type=application%2Foctet-stream -O sws.tar.gz
+          wget -q https://github.com/static-web-server/static-web-server/releases/download/v2.41.0/static-web-server-v2.41.0-aarch64-linux-android.tar.gz -O sws.tar.gz
           tar -xzf sws.tar.gz
           mv static-web-server-v2.41.0-aarch64-linux-android/static-web-server sws-static
           chmod +x sws-static
