@@ -21,32 +21,38 @@ jobs:
           chmod +x sws-static
           
 
-      - name: 下載 PHP-CGI 靜態文件（新連結：rentry000/pihole php.zip）
+      - name: 下載 PHP-CGI 靜態文件（rentry000/pihole php.zip）
         run: |
-          wget -q https://github.com/rentry000/pihole/raw/refs/heads/main/php.zip -O php.zip
-          unzip php.zip -d php-static
-          # debug: 顯示完整 unzip 後的目錄結構
-          echo "Unzipped contents:"
-          ls -R php-static || tree php-static || find php-static
-          # 嘗試找到 PHP binary（常見位置：bin/php 或 php-cgi）
-          if [ -f "php-static/bin/php" ]; then
-            cp php-static/bin/php php-static/php-cgi-arm64
-            chmod +x php-static/php-cgi-arm64
-            echo "Found and copied bin/php → php-cgi-arm64"
-          elif [ -f "php-static/php-cgi" ]; then
-            cp php-static/php-cgi php-static/php-cgi-arm64
-            chmod +x php-static/php-cgi-arm64
-            echo "Found php-cgi directly"
-          elif [ -f "php-static/bin/php-cgi" ]; then
-            cp php-static/bin/php-cgi php-static/php-cgi-arm64
-            chmod +x php-static/php-cgi-arm64
-            echo "Found bin/php-cgi"
-          else
-            echo "Error: No suitable PHP binary found in zip (looked for bin/php, php-cgi, bin/php-cgi)"
+          echo "下載 php.zip..."
+          wget https://github.com/rentry000/pihole/raw/refs/heads/main/php.zip -O php.zip || { echo "wget 失敗！連結可能無效或 404。"; ls -l php.zip; exit 1; }
+          echo "檔案大小："
+          ls -lh php.zip
+          if [ ! -s php.zip ]; then
+            echo "php.zip 是空檔案或下載失敗！"
             exit 1
           fi
-          # 可選：檢查 binary 類型（不會執行，只看格式）
-          file php-static/php-cgi-arm64
+          echo "嘗試 unzip..."
+          unzip -l php.zip   # 先 list 內容，不解壓
+          unzip php.zip -d php-static || { echo "unzip 失敗，zip 可能損壞"; exit 1; }
+          echo "=== unzip 後的完整檔案列表 ==="
+          find php-static -type f -exec ls -l {} \; || ls -R php-static
+          # 找 PHP binary
+          PHP_BIN=""
+          for candidate in php-static/*/php php-static/php* php-static/bin/*php* php-static/*php*; do
+            if [ -f "$candidate" ] && file "$candidate" | grep -q "ELF.*executable"; then
+              PHP_BIN="$candidate"
+              break
+            fi
+          done
+          if [ -n "$PHP_BIN" ]; then
+            cp "$PHP_BIN" php-static/php-cgi-arm64
+            chmod +x php-static/php-cgi-arm64
+            echo "找到並複製 binary: $PHP_BIN → php-cgi-arm64"
+            file php-static/php-cgi-arm64
+          else
+            echo "錯誤：zip 中沒有找到任何 ELF executable PHP binary！"
+            exit 1
+          fi
 
       - name: 下載官方 Web UI
         run: |
