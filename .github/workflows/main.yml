@@ -19,7 +19,6 @@ jobs:
           tar -xzf sws.tar.gz
           mv static-web-server-v2.41.0-aarch64-linux-android/static-web-server sws-static
           chmod +x sws-static
-          
 
       - name: 下載 PHP-CGI 靜態文件（rentry000/pihole php.zip）
         run: |
@@ -60,8 +59,8 @@ jobs:
           cp src/gravity.sh $MODULE/etc/pihole/
           chmod +x $MODULE/system/bin/pihole $MODULE/etc/pihole/gravity.sh
 
-          # Web UI（靜態 + 動態部分）
-          cp -r web-src/admin/* $MODULE/www/admin/
+          # Web UI（靜態 + 動態部分） → 已修正為 v6+ 結構
+          cp -r web-src/* $MODULE/www/admin/
 
           # static-web-server + PHP-CGI
           cp sws-static $MODULE/system/bin/static-web-server
